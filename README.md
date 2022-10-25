@@ -7,3 +7,6 @@
 ## RU
 ```Данный проект писался для парсинга медиа файлов с различных сетевых борд по типу двача, нульчана и прочих```
 > От проекта [ꜱᴜʀ.ɴᴇᴛꜱᴛᴀʟᴋɪɴɢ](https://t.me/sur_NET) для [Garbage board](https://t.me/garbage_board)
+
+
+![](https://github.com/Apanazar/stuprum/blob/master/dvach.jpg)
