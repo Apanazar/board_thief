@@ -3,112 +3,97 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
-	"math/rand"
+	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
-	"time"
-
-	"github.com/gocolly/colly/v2"
 )
 
-var (
-	target   = flag.String("target", "empty", "specify the site address")
-	filetype = flag.String("type", "jpg", "specify the file type")
-	arr      = [][]byte{}
-	coll     = 0
-)
-
-func URLdomain(str string) (string, string) {
-	url, err := url.Parse(str)
+func URLdomain(str string) (string, error) {
+	u, err := url.Parse(str)
 	if err != nil {
-		fmt.Println(err)
+		return "", err
 	}
-	return url.Hostname(), url.Scheme
-}
-
-func Exists(name string) bool {
-	if _, err := os.Stat(name); err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-	}
-	return true
-}
-
-func filenameGen() string {
-	const base64range string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-	var id []byte
-
-	rand.Seed(time.Now().UnixNano())
-	for i := 0; i < 8; i++ {
-		id = append(id, base64range[rand.Intn(37)])
-	}
-
-	return string(id)
-}
-
-func scrape() {
-	collector := colly.NewCollector(
-		colly.IgnoreRobotsTxt(),
-		colly.Async(true),
-		colly.MaxDepth(1),
-	)
-
-	hostname, _ := URLdomain(*target)
-	collector.OnHTML("a", func(e *colly.HTMLElement) {
-		src := e.Attr("href")
-
-		if strings.Contains(src, "."+*filetype) {
-			prefix := "http://"
-			_, scheme := URLdomain(src)
-			if scheme == "" {
-				fmt.Println(prefix + hostname + src)
-				collector.Visit(prefix + hostname + src)
-			} else {
-				fmt.Println(prefix + src)
-				collector.Visit(prefix + src)
-			}
-			coll++
-		}
-	})
-
-	collector.OnResponse(func(r *colly.Response) {
-		if r.StatusCode == 200 {
-			data := r.Body
-			arr = append(arr, data)
-		}
-	})
-
-	collector.Visit(*target)
-	collector.Wait()
+	return u.Hostname(), nil
 }
 
 func main() {
+	var target string
+	flag.StringVar(&target, "target", "empty", "specify the site address")
+
 	flag.Usage = func() {
-		w := flag.CommandLine.Output()
-		fmt.Fprintln(w, "Usage of crawler:")
+		fmt.Fprintln(
+			os.Stderr, "Usage: thief [--arg] [value]\n",
+			"The program parses media files from network boards\n",
+			"Arguments:",
+		)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
-	scrape()
-	fmt.Println("Address:\t", *target)
-	fmt.Println("File type:\t", *filetype)
-	fmt.Println("Total links:\t\t", coll)
+	if target == "empty" {
+		flag.Usage()
+		os.Exit(1)
+	}
 
-	for _, v := range arr {
-		if coll != 0 {
-			filename := filenameGen()
-			if !Exists(filename) {
-				err := ioutil.WriteFile(fmt.Sprintf("%s.%s", filename, *filetype), v, os.FileMode(0777))
+	resp, err := http.Get(target)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
 
-				if err != nil {
-					fmt.Println(err)
-				}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	mediaPattern := `src="([^"]+\.(jpg|png|gif|jpeg|mp4|mov|webm|svg))"`
+	mediaRegex := regexp.MustCompile(mediaPattern)
+	mediaMatches := mediaRegex.FindAllStringSubmatch(string(body), -1)
+
+	quantity, downloaded := 0, 0
+	for _, match := range mediaMatches {
+		url := match[1]
+		quantity++
+
+		if !strings.HasPrefix(url, "http") {
+			hostname, err := URLdomain(target)
+			if err != nil {
+				fmt.Println("Error:", err)
+				continue
 			}
+
+			url = "https://" + hostname + url
+		}
+
+		resp, err := http.Get(url)
+		if err != nil {
+			fmt.Println("Error:", err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		filename := url[strings.LastIndex(url, "/")+1:]
+		file, err := os.Create(filename)
+		if err != nil {
+			fmt.Println("Error creating", filename, ":", err)
+			continue
+		}
+		defer file.Close()
+
+		_, err = io.Copy(file, resp.Body)
+		if err != nil {
+			fmt.Println("Error writing", filename, ":", err)
+			continue
+		} else {
+			downloaded++
 		}
 	}
-	fmt.Println("Downloaded files:\t", len(arr)-1)
+
+	fmt.Printf("Total:\t%d\nDownloaded:\t%d\n", quantity, downloaded)
 }
